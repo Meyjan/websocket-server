@@ -47,6 +47,7 @@ class WebSocketHandler(StreamRequestHandler):
         return self.rfile.read(num)
     
     def read_next(self):
+        print("Read next called")
         message_buffer = bytearray()
 
         try:
@@ -73,12 +74,14 @@ class WebSocketHandler(StreamRequestHandler):
 
         if not mask:
             print("Client is not masked. Ending connection to the handler")
+            self.send(bytes(encode_to_UTF8("1002")), OPCODE_CLOSE_CONN)
             self.keep_alive = False
             return
         
         if opc == OPCODE_CONTINUATION:
             # Do nothing... Cuz why not? It depends on the first opcode
             print("Continued frame")
+            return
         elif opc == OPCODE_TEXT:
             print("Text detected")
             handler = self.server._message_received_
@@ -111,16 +114,19 @@ class WebSocketHandler(StreamRequestHandler):
         print("fin =", fin)
         print("opc =", opc)
 
+        print("Try calling handler")
         try:
             handler(self, message.decode("utf-8"))
         except Exception as err:
             handler(self, message)
         
     def send_message(self, message):
+        print("Message sending:", message)
         self.send(bytes(encode_to_UTF8(message)), OPCODE_TEXT)
 
     def send_pong(self, message):
-        self.send(message, OPCODE_PONG)
+        print("Pong sending:", message)
+        self.send(bytes(encode_to_UTF8(message)), OPCODE_PONG)
     
     def send_file(self, fileName, opcode=OPCODE_BINARY):
         print("File name =", fileName)
