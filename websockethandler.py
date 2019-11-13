@@ -48,42 +48,11 @@ class WebSocketHandler(StreamRequestHandler):
             if not self.doHandshake:
                 self.handshake()
             elif self.approvedClient:
-                if (not waiting):
-                    response = self.read_next()
-                    print(response)
-                    if (response[0] == True):
-                        if (response[1] == OPCODE_BINARY):
-                            response[3](self, response[2])
-                        else:
-                            response[3](self, response[2].decode("utf-8"))
-                    else:
-                        waiting = True
-                        buffer.extend(response[2])
-                        command = response[1]
-                        handler = response[3]
-                        remainingLength = response[4]
-                        mask = response[5]
-                else:
-                    print(waiting)
-                    response = self.read_continuation(remainingLength)
-                    buffer.extend(response)
-                    
-                    if (command == OPCODE_BINARY):
-                        handler(self, buffer)
-                    else:
-                        handler(self, buffer.decode("utf-8"))
-                    waiting = False 
+                self.read_next()
 
     def read_bytes(self, num):
         return self.rfile.read(num)
 
-    def read_continuation(self, length, mask):
-        message = bytearray()
-        for messageByte in self.read_bytes(length):
-            messageByte ^= mask[len(message) % 4]
-            message.append(messageByte)
-        return message
-    
     def read_next(self):
         try:
             byte1, byte2 = self.read_bytes(2)
@@ -112,6 +81,7 @@ class WebSocketHandler(StreamRequestHandler):
 
         if fin == 0:
             print("Fin = 0")
+            self.send_message("0")
             return
         
         if opc == OPCODE_CONTINUATION:
@@ -136,6 +106,7 @@ class WebSocketHandler(StreamRequestHandler):
             length = struct.unpack(">H", self.rfile.read(2))[0]
         elif length == 127:
             length = struct.unpack(">Q", self.rfile.read(8))[0]
+            return
         
         masks = self.read_bytes(4)
         message = bytearray()
@@ -147,10 +118,10 @@ class WebSocketHandler(StreamRequestHandler):
         print("length = ", length)
         print("message length = ", len(message))
 
-        if (length == len(message)):
-            return (True, opc, message, handler)
+        if (opc == OPCODE_BINARY):
+            handler(self, message)
         else:
-            return (False, opc, message, handler, (length  - len(message)), masks)
+            handler(self, message.decode("utf-8"))
 
         
     def send_message(self, message):
