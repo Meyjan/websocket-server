@@ -5,19 +5,19 @@ import os
 
 class WebSocket(ThreadingMixIn, TCPServer):
     clients = []
-    id_counter = 0
+    idCounter = 0
 
     def __init__(self, addr=('0.0.0.0', 9001)):
         TCPServer.__init__(self, addr, WebSocketHandler)
         self.port = self.socket.getsockname()[1]
 
         bigfile = open("test.zip", "rb")
-        temp_msg = bigfile.read()
-        self.file_read = temp_msg
-        self.file_length = len(temp_msg)
-        self.hash_md5 = hashlib.md5(temp_msg).hexdigest()
+        tempMsg = bigfile.read()
+        self.fileRead = tempMsg
+        self.fileLength = len(tempMsg)
+        self.hashMD5 = hashlib.md5(tempMsg).hexdigest()
         bigfile.close()
-        print(self.file_length)
+        print(self.fileLength)
 
     def run(self):
         try:
@@ -30,54 +30,50 @@ class WebSocket(ThreadingMixIn, TCPServer):
             print(str(err))
             exit(1)
     
-    def send_message(self, to_client, msg):
-        to_client['handler'].send_message(msg)
+    def sending_message(self, client, msg):
+        client['handler'].send_message(msg)
     
-    def _message_received_(self, handler, msg):
+    def receiving_message(self, handler, msg):
         listOfString = self.parse_message(msg)
         print(listOfString[0])
         if(listOfString[0] == "!echo"):
             listOfString.pop(0)
-            self.send_message(self.handler_to_client(handler), " ".join(listOfString))
+            self.sending_message(self.client_handler(handler), " ".join(listOfString))
         elif(listOfString[0] == "!submission"):
-            self.handler_to_client(handler)['handler'].send_file(self.file_read)
+            self.client_handler(handler)['handler'].send_file(self.fileRead)
 
-    def _file_received_(self, handler, msg):
-        print("File received")
-        hash_md5_1 = self.hash_md5
-        hash_md5_2 = hashlib.md5(msg).hexdigest()
-        if(hash_md5_1 == hash_md5_2):
-            self.send_message(self.handler_to_client(handler), "1")
+    def receiving_file(self, handler, msg):
+        print("File received")  
+        hashed = hashlib.md5(msg).hexdigest()
+        if(self.hashMD5 == hashed):
+            self.sending_message(self.client_handler(handler), "1")
         else:
-            self.send_message(self.handler_to_client(handler), "0")
+            self.sending_message(self.client_handler(handler), "0")
     
     def parse_message(self, msg):
         listOfString = msg.split(' ')
         return listOfString
 
-    def _ping_received_(self, handler, msg):
+    def receiving_ping(self, handler, msg):
         handler.send_pong(msg)
 
-    def _pong_received_(self, handler, msg):
-        pass
-
-    def _new_client_(self, handler):
-        self.id_counter += 1
+    def handle_new_client(self, handler):
+        self.idCounter += 1
         client = {
-            'id': self.id_counter,
+            'id': self.idCounter,
             'handler': handler,
             'address': handler.client_address
         }
         self.clients.append(client)
         print("New client connected and was given id %d" % client['id'])
 
-    def _client_left_(self, handler):
-        client = self.handler_to_client(handler)
+    def handle_client_left(self, handler):
+        client = self.client_handler(handler)
         print("Client(%d) disconnected" % client['id'])
         if client in self.clients:
             self.clients.remove(client)
         
-    def handler_to_client(self, handler):
+    def client_handler(self, handler):
         for client in self.clients:
             if client['handler'] == handler:
                 return client

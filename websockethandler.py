@@ -32,19 +32,57 @@ class WebSocketHandler(StreamRequestHandler):
 
     def setup(self):
         StreamRequestHandler.setup(self)
-        self.keep_alive = True
-        self.handshake_done = False
-        self.valid_client = False
+        self.connectionAlive = True
+        self.doHandshake = False
+        self.approvedClient = False
 
     def handle(self):
-        while self.keep_alive:
-            if not self.handshake_done:
+        buffer = bytearray()
+        waiting = False
+        command = OPCODE_BINARY
+        handler = self.server.receiving_file
+        remainingLength = 0
+        mask = 0
+
+        while self.connectionAlive:
+            if not self.doHandshake:
                 self.handshake()
-            elif self.valid_client:
-                self.read_next()
+            elif self.approvedClient:
+                if (not waiting):
+                    response = self.read_next()
+                    print(response)
+                    if (response[0] == True):
+                        if (response[1] == OPCODE_BINARY):
+                            response[3](self, response[2])
+                        else:
+                            response[3](self, response[2].decode("utf-8"))
+                    else:
+                        waiting = True
+                        buffer.extend(response[2])
+                        command = response[1]
+                        handler = response[3]
+                        remainingLength = response[4]
+                        mask = response[5]
+                else:
+                    print(waiting)
+                    response = self.read_continuation(remainingLength)
+                    buffer.extend(response)
+                    
+                    if (command == OPCODE_BINARY):
+                        handler(self, buffer)
+                    else:
+                        handler(self, buffer.decode("utf-8"))
+                    waiting = False 
 
     def read_bytes(self, num):
         return self.rfile.read(num)
+
+    def read_continuation(self, length, mask):
+        message = bytearray()
+        for messageByte in self.read_bytes(length):
+            messageByte ^= mask[len(message) % 4]
+            message.append(messageByte)
+        return message
     
     def read_next(self):
         try:
@@ -52,7 +90,7 @@ class WebSocketHandler(StreamRequestHandler):
         except ConnectionResetError as err:
             if err.errno == errno.ECONNRESET:
                 print("Error connection reset")
-                self.keep_alive = 0
+                self.connectionAlive = 0
                 return
             byte1, byte2 = 0, 0
         except ValueError as err:
@@ -65,13 +103,11 @@ class WebSocketHandler(StreamRequestHandler):
         length = byte2 & PAYLOAD_LEN
 
         if opc == OPCODE_CLOSE_CONN:
-            self.keep_alive = False
+            self.connectionAlive = False
             return
 
         if not mask:
-            print("Client is not masked. Ending connection to the handler")
-            self.send(bytes(encode_to_UTF8("1002")), OPCODE_CLOSE_CONN)
-            self.keep_alive = False
+            self.connectionAlive = False
             return
 
         if fin == 0:
@@ -79,18 +115,18 @@ class WebSocketHandler(StreamRequestHandler):
             return
         
         if opc == OPCODE_CONTINUATION:
-            # Do nothing... Cuz why not? It depends on the first opcode
+            # Do nothing because it depends on the first opcode
             return
         elif opc == OPCODE_TEXT:
-            handler = self.server._message_received_
+            handler = self.server.receiving_message
         elif opc == OPCODE_BINARY:
-            handler = self.server._file_received_
+            handler = self.server.receiving_file
         elif opc == OPCODE_PING:
-            handler = self.server._ping_received_
+            handler = self.server.receiving_ping
         elif opc == OPCODE_PONG:
-            handler = self.server._pong_received_
+            return
         else:
-            self.keep_alive = False
+            self.connectionAlive = False
             return
         
         print("opc =", opc)
@@ -99,33 +135,31 @@ class WebSocketHandler(StreamRequestHandler):
         if length == 126:
             length = struct.unpack(">H", self.rfile.read(2))[0]
         elif length == 127:
-            if (opc == OPCODE_BINARY):
-                self.send_message("0")
-                return
             length = struct.unpack(">Q", self.rfile.read(8))[0]
         
         masks = self.read_bytes(4)
         message = bytearray()
  
-        for message_byte in self.read_bytes(length):
-            message_byte ^= masks[len(message) % 4]
-            message.append(message_byte)
-        
+        for messageByte in self.read_bytes(length):
+            messageByte ^= masks[len(message) % 4]
+            message.append(messageByte)
         
         print("length = ", length)
+        print("message length = ", len(message))
 
-        if (opc == OPCODE_BINARY):
-            handler(self, message)
+        if (length == len(message)):
+            return (True, opc, message, handler)
         else:
-            handler(self, message.decode("utf-8"))
+            return (False, opc, message, handler, (length  - len(message)), masks)
+
         
     def send_message(self, message):
         print("Message sending:", message)
-        self.send(bytes(encode_to_UTF8(message)), OPCODE_TEXT)
+        self.send(bytes(message.encode('UTF-8')), OPCODE_TEXT)
 
     def send_pong(self, message):
         print("Pong sending:", message)
-        self.send(bytes(encode_to_UTF8(message)), OPCODE_PONG)
+        self.send(bytes(message.encode('UTF-8')), OPCODE_PONG)
     
     def send_file(self, message, opcode=OPCODE_BINARY):
         self.send(message, opcode)
@@ -133,19 +167,19 @@ class WebSocketHandler(StreamRequestHandler):
     def send(self, message, opcode=OPCODE_TEXT, fin = 0x80):
         payload = message
         header  = bytearray()
-        payload_length = len(payload)
+        lengthPayload = len(payload)
 
-        if payload_length <= 125:
+        if lengthPayload <= 125:
             header.append(fin | opcode)
-            header.append(payload_length)
-        elif payload_length >= 126 and payload_length <= 65535:
+            header.append(lengthPayload)
+        elif lengthPayload >= 126 and lengthPayload <= 65535:
             header.append(fin | opcode)
             header.append(PAYLOAD_LEN_EXT16)
-            header.extend(struct.pack(">H", payload_length))
-        elif payload_length < 18446744073709551616:
+            header.extend(struct.pack(">H", lengthPayload))
+        elif lengthPayload < 18446744073709551616:
             header.append(fin | opcode)
             header.append(PAYLOAD_LEN_EXT64)
-            header.extend(struct.pack(">Q", payload_length))
+            header.extend(struct.pack(">Q", lengthPayload))
         else:
             print("Unable to send package because too large")
             return
@@ -156,8 +190,8 @@ class WebSocketHandler(StreamRequestHandler):
 
     def read_http_headers(self):
         headers = {}
-        http_get = self.rfile.readline().decode().strip()
-        assert http_get.upper().startswith('GET')
+        httpGet = self.rfile.readline().decode().strip()
+        assert httpGet.upper().startswith('GET')
         while True:
             header = self.rfile.readline().decode().strip()
             if not header:
@@ -173,47 +207,34 @@ class WebSocketHandler(StreamRequestHandler):
             assert headers['upgrade'].lower() == 'websocket'
         except AssertionError:
             print("Header is not websocket")
-            self.keep_alive = False
+            self.connectionAlive = False
             return
 
         try:
             key = headers['sec-websocket-key']
         except KeyError:
             print("Client tried to connect but was missing a key")
-            self.keep_alive = False
+            self.connectionAlive = False
             return
 
-        response = self.make_handshake_response(key)
-        self.handshake_done = self.request.send(response.encode())
-        self.valid_client = True
-        self.server._new_client_(self)
-
-    @classmethod
-    def make_handshake_response(cls, key):
+        response = self.create_response_handshake(key)
+        self.doHandshake = self.request.send(response.encode())
+        self.approvedClient = True
+        self.server.handle_new_client(self)
+    
+    def create_response_handshake(self, key):
         return \
           'HTTP/1.1 101 Switching Protocols\r\n'\
           'Upgrade: websocket\r\n'              \
           'Connection: Upgrade\r\n'             \
           'Sec-WebSocket-Accept: %s\r\n'        \
-          '\r\n' % cls.calculate_response_key(key)
+          '\r\n' % self.calculate_response_accept(key)
 
-    @classmethod
-    def calculate_response_key(cls, key):
+    def calculate_response_accept(self, key):
         GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
         hash = sha1(key.encode() + GUID.encode())
-        response_key = b64encode(hash.digest()).strip()
-        return response_key.decode('ASCII')
+        responseKey = b64encode(hash.digest()).strip()
+        return responseKey.decode('ASCII')
 
     def finish(self):
-        self.server._client_left_(self)
-
-
-def encode_to_UTF8(data):
-    try:
-        return data.encode('UTF-8')
-    except UnicodeEncodeError as e:
-        print("Could not encode data to UTF-8 -- %s" % e)
-        return False
-    except Exception as e:
-        raise(e)
-        return False
+        self.server.handle_client_left(self)
