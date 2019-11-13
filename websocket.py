@@ -7,10 +7,18 @@ class WebSocket(ThreadingMixIn, TCPServer):
     clients = []
     id_counter = 0
 
-    def __init__(self, addr=('127.0.0.1', 9001)):
+    def __init__(self, addr=('0.0.0.0', 9001)):
         TCPServer.__init__(self, addr, WebSocketHandler)
         self.port = self.socket.getsockname()[1]
-    
+
+        bigfile = open("test.zip", "rb")
+        temp_msg = bigfile.read()
+        self.file_read = temp_msg
+        self.file_length = len(temp_msg)
+        self.hash_md5 = hashlib.md5(temp_msg).hexdigest()
+        bigfile.close()
+        print(self.file_length)
+
     def run(self):
         try:
             print("Server start running")
@@ -32,13 +40,11 @@ class WebSocket(ThreadingMixIn, TCPServer):
             listOfString.pop(0)
             self.send_message(self.handler_to_client(handler), " ".join(listOfString))
         elif(listOfString[0] == "!submission"):
-            print("Test")
-            self.handler_to_client(handler)['handler'].send_file("test.zip")
+            self.handler_to_client(handler)['handler'].send_file(self.file_read)
 
     def _file_received_(self, handler, msg):
         print("File received")
-        f1 = open("test.zip","rb")
-        hash_md5_1 = hashlib.md5(f1.read()).hexdigest()
+        hash_md5_1 = self.hash_md5
         hash_md5_2 = hashlib.md5(msg).hexdigest()
         if(hash_md5_1 == hash_md5_2):
             self.send_message(self.handler_to_client(handler), "1")
@@ -78,7 +84,7 @@ class WebSocket(ThreadingMixIn, TCPServer):
 
 
 PORT = 9001
-HOST = '127.0.0.1'
+HOST = '0.0.0.0'
 addr = (HOST, PORT)
 
 server = WebSocket(addr)

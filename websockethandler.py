@@ -47,9 +47,6 @@ class WebSocketHandler(StreamRequestHandler):
         return self.rfile.read(num)
     
     def read_next(self):
-        print("Read next called")
-        message_buffer = bytearray()
-
         try:
             byte1, byte2 = self.read_bytes(2)
         except ConnectionResetError as err:
@@ -68,7 +65,6 @@ class WebSocketHandler(StreamRequestHandler):
         length = byte2 & PAYLOAD_LEN
 
         if opc == OPCODE_CLOSE_CONN:
-            print("Connection to handler ended. Detected FIN OPCODE_CLOSSCONN")
             self.keep_alive = False
             return
 
@@ -77,31 +73,35 @@ class WebSocketHandler(StreamRequestHandler):
             self.send(bytes(encode_to_UTF8("1002")), OPCODE_CLOSE_CONN)
             self.keep_alive = False
             return
+
+        if fin == 0:
+            print("Fin = 0")
+            return
         
         if opc == OPCODE_CONTINUATION:
             # Do nothing... Cuz why not? It depends on the first opcode
-            print("Continued frame")
             return
         elif opc == OPCODE_TEXT:
-            print("Text detected")
             handler = self.server._message_received_
         elif opc == OPCODE_BINARY:
-            print("Binary detected")
             handler = self.server._file_received_
         elif opc == OPCODE_PING:
-            print("PING")
             handler = self.server._ping_received_
         elif opc == OPCODE_PONG:
-            print("PONG")
             handler = self.server._pong_received_
         else:
-            print("Invalid opcode. Ending connection to the handler")
             self.keep_alive = False
             return
+        
+        print("opc =", opc)
+        print("length = ", length)
 
         if length == 126:
             length = struct.unpack(">H", self.rfile.read(2))[0]
         elif length == 127:
+            if (opc == OPCODE_BINARY):
+                self.send_message("0")
+                return
             length = struct.unpack(">Q", self.rfile.read(8))[0]
         
         masks = self.read_bytes(4)
@@ -111,14 +111,13 @@ class WebSocketHandler(StreamRequestHandler):
             message_byte ^= masks[len(message) % 4]
             message.append(message_byte)
         
-        print("fin =", fin)
-        print("opc =", opc)
+        
+        print("length = ", length)
 
-        print("Try calling handler")
-        try:
-            handler(self, message.decode("utf-8"))
-        except Exception as err:
+        if (opc == OPCODE_BINARY):
             handler(self, message)
+        else:
+            handler(self, message.decode("utf-8"))
         
     def send_message(self, message):
         print("Message sending:", message)
@@ -128,15 +127,8 @@ class WebSocketHandler(StreamRequestHandler):
         print("Pong sending:", message)
         self.send(bytes(encode_to_UTF8(message)), OPCODE_PONG)
     
-    def send_file(self, fileName, opcode=OPCODE_BINARY):
-        print("File name =", fileName)
-        first_frame = True
-        last_frame = False
-        bigfile = open(fileName, "rb")
-        temp_msg = bigfile.read()
-        bigfile.close()
-
-        self.send(temp_msg, OPCODE_BINARY)
+    def send_file(self, message, opcode=OPCODE_BINARY):
+        self.send(message, opcode)
 
     def send(self, message, opcode=OPCODE_TEXT, fin = 0x80):
         payload = message
@@ -158,8 +150,7 @@ class WebSocketHandler(StreamRequestHandler):
             print("Unable to send package because too large")
             return
         
-        print(header)
-        print(payload)
+        print("opc=", opcode)
         
         self.request.send(header + payload)
 
